@@ -1,135 +1,159 @@
+# Desarrollar un programa que pueda ser ejecutado por consola del siguiente modo:
+
+# tpi4 probs.txt N M [-p]
+
+# Donde:
+
+# tpi4 es el programa ejecutable
+# probs.txt es un archivo de texto ASCII
+# N y M son números naturales
+# -p es un flag opcional
+# El programa debe realizar las siguientes acciones:
+
+# Leer del archivo probs.txt las probabilidades de la fuente binaria (primera línea) y la matriz del canal binario (segunda y tercera línea).
+# Calcular las entropías del canal, la equivocación y la información mutua.
+# Simular el envío de N mensajes aleatorios de longitud M.
+# Si se incluye el flag -p, aplicar el método de paridad cruzada al conjunto de mensajes a enviar.
+# Informar la cantidad de mensajes enviados correctamente, la cantidad de mensajes erróneos y la cantidad de mensajes corregidos.
+import sys
 import numpy as np
-import sys  # Se agrega la importación del módulo sys
+import random
 
-# Función para leer las probabilidades desde un archivo
-def leer_probabilidades(nombre_archivo):
-    with open(nombre_archivo) as f:
-        # Lee las probabilidades de la fuente
-        p_fuente = np.array([float(x) for x in f.readline().split()])
+def leer_probabilidades(archivo):
+    matriz_canal = []
+    
+    with open(archivo, "r") as f:
+        probabilidades = f.readline()
+        probabilidades = probabilidades.split(" ")
         
-        # Lee las probabilidades del canal como una matriz
-        p_canal = np.array([
-            [float(x) for x in fila.split()]
-            for fila in f.readlines()
-        ])
-    return p_fuente, p_canal
+        probabilidades = [float(probabilidad) for probabilidad in probabilidades]
+        
+        fuente = probabilidades
+        
+        for linea in f:
+            probabilidades = linea.split(" ")
+            matriz_canal.append([float(probabilidad) for probabilidad in probabilidades])
+        
+        matriz_canal = np.array(matriz_canal)
+    
+    return fuente, matriz_canal
 
-# Función para calcular la entropía de una distribución de probabilidad
-def calcular_entropia(p):
-    # La entropía se calcula como la suma ponderada de las probabilidades logarítmicas negativas
-    entropia = -np.sum(p * np.log2(p))
+def entropia_apriori(probabilidades):
+    entropia = -np.sum(probabilidades * np.log2(probabilidades))
     return entropia
 
-# Función para calcular la equivocación entre la fuente y el canal
-def calcular_equivocacion(p_fuente, p_canal):
-    # Calcula la probabilidad conjunta entre la fuente y el canal
-    p_conjunta = np.einsum('i,jk->ik', p_fuente, p_canal)
+def probBj(p_fuente, p_canal):
+    b = np.dot(p_fuente, p_canal)
+    return b
+
+def calculos(p_fuente, matriz_canal):
+    # Calcular las entropías del canal, la equivocación y la información mutua.
     
-    # Calcula la probabilidad marginal del canal (ruido)
-    p_ruido = np.sum(p_canal, axis=0)
+    # H(A)
+    entropiaA = entropia_apriori(p_fuente)
     
-    # Calcula la equivocación utilizando la fórmula específica para el canal discreto
-    equivocacion = calcular_entropia(p_ruido) - np.sum(p_conjunta * np.log2(p_canal / p_ruido))
-    return equivocacion
+    # P(bj)
+    pbj0 = probBj(p_fuente, matriz_canal[:,0])
+    pbj1 = probBj(p_fuente, matriz_canal[:,1])
+    
+    # H(B)
+    entropiaB = (-pbj0 * np.log2(pbj0)) + (- pbj1 * np.log2(pbj1))
+    
+    # P(ai/bj)
+    pa0b0 = matriz_canal[0][0] * p_fuente[0] / pbj0
+    pa0b1 = matriz_canal[0][1] * p_fuente[0] / pbj1
 
-# Función para calcular la información mutua entre la fuente y el canal
-def calcular_informacion_mutua(p_fuente, p_canal):
-    # La información mutua se calcula como la diferencia entre la entropía de la fuente y la equivocación
-    informacion_mutua = calcular_entropia(p_fuente) - calcular_equivocacion(p_fuente, p_canal)
-    return informacion_mutua
+    pa1b0 = 1 - pa0b0
+    pa1b1 = 1 - pa0b1
+    
+    # Susceso ==> P(ai,bj)
+    suceso00 = matriz_canal[0][0] * p_fuente[0]
+    suceso01 = matriz_canal[0][1] * p_fuente[0]
+    suceso10 = matriz_canal[1][0] * p_fuente[1]
+    suceso11 = matriz_canal[1][1] * p_fuente[1]
+    
+    # Entropias a posteriori H(A,bj)
+    entropiab0 = (-pa0b0 * np.log2(pa0b0)) + (- pa1b0 * np.log2(pa1b0))
+    entropiab1 = (-pa0b1 * np.log2(pa0b1)) + (- pa1b1 * np.log2(pa1b1))
+    
+    # Equivocacion H(A/B)
+    equivocacion = (pbj0 * entropiab0) + (pbj1 * entropiab1) 
+    
+    # Informacion mutua I(A,B)
+    informacion_mutua = entropiaA - equivocacion
+    
+    # Entropia afin H(A,B)
+    entropia_afin = entropiaB + equivocacion
+    
+    # Perdida H(B/A)
+    perdida = entropia_afin - entropiaA
+    
+    return entropiaA, entropiaB, entropiab0, entropiab1, equivocacion, informacion_mutua, entropia_afin, perdida
 
-# Función para simular la transmisión de mensajes a través de un canal
-def simular_transmision(p_fuente, p_canal, N, M, paridad_cruzada=False):
-    if paridad_cruzada:
-        mensajes = generar_mensajes_paridad_cruzada(N, M)
-    else:
-        mensajes = generar_mensajes_aleatorios(N, M)
+def aplicar_parity_check(mensaje):
+    # Aplicar el método de paridad cruzada al mensaje
+    mensaje_list = list(mensaje)
+    paridad = 0
+    for bit in mensaje_list:
+        paridad ^= int(bit)
+    return mensaje + str(paridad)
 
-    # Simula la transmisión de mensajes a través del canal
-    mensajes_transmitidos = np.random.choice(2, size=(N, M), p=p_canal)
-    mensajes_recibidos = mensajes_transmitidos.dot(p_canal.T)
-
-    # Calcula la cantidad de mensajes correctos e incorrectos
-    mensajes_correctos = np.sum(mensajes == mensajes_recibidos)
-    mensajes_incorrectos = N - mensajes_correctos
-
-    if paridad_cruzada:
-        mensajes_corregidos = corregir_mensajes_paridad_cruzada(mensajes_recibidos)
-    else:
-        mensajes_corregidos = 0
-
-    return mensajes_correctos, mensajes_incorrectos, mensajes_corregidos
-
-# Función para generar mensajes aleatorios
-def generar_mensajes_aleatorios(N, M):
-    return np.random.choice(2, size=(N, M))
-
-# Función para generar mensajes con paridad cruzada
-def generar_mensajes_paridad_cruzada(N, M):
-    mensajes = generar_mensajes_aleatorios(N, M - 1)
-
-    # Calcula los bits de paridad y los agrega a los mensajes
-    bits_paridad = np.sum(mensajes, axis=1) % 2
-    bits_paridad = np.expand_dims(bits_paridad, axis=1)
-
-    mensajes = np.concatenate((mensajes, bits_paridad), axis=1)
-
+def generar_mensajes_binarios(N, M):
+    mensajes = []
+    for _ in range(N):
+        mensaje = ''.join(random.choice('01') for _ in range(M))
+        mensajes.append(mensaje)
     return mensajes
 
-# Función para corregir mensajes con paridad cruzada
-def corregir_mensajes_paridad_cruzada(mensajes_recibidos):
-    bits_paridad = mensajes_recibidos[:, -1]
-    mensajes_corregidos = mensajes_recibidos[:, :-1]
+def main():
+    filename = "tp4_sample0.txt"
+    
+    p_fuente, matriz_canal = leer_probabilidades(filename)
+    HA, HB, HB0, HB1, equivocacion, informacion_mutua, HAfin, perdida = calculos(p_fuente, matriz_canal)
+    
+    print("")
+    print(f"Entropia a priori H(A): {HA}")
+    print(f"Entropia a priori H(B): {HB}")
+    print(f"Entropia a posteriori H(A/b=0): {HB0}")
+    print(f"Entropia a posteriori H(A/b=1): {HB1}")
+    print(f"Equivocacion del canal H(A/B): {equivocacion}")
+    print(f"Informacion mutua I(A,B): {informacion_mutua}")
+    print(f"Entropia afin H(A,B): {HAfin}")
+    print(f"Perdida H(B/A): {perdida}")
+    print("")
+    
+    if "-p" in sys.argv:
+        mensajes = generar_mensajes_binarios(3, 10)
+        mensajes_con_parity = [aplicar_parity_check(mensaje) for mensaje in mensajes]
+        
+        # Simular la transmisión y contar los mensajes enviados correctamente, incorrectos y corregidos
+        mensajes_correctos = 0
+        mensajes_incorrectos = 0
+        mensajes_corregidos = 0
+        
+        for mensaje, mensaje_con_parity in zip(mensajes, mensajes_con_parity):
+            # Simular un error en la transmisión (puedes cambiar esto según tus necesidades)
+            error = random.choice([True, False])
+            if error:
+                mensajes_incorrectos += 1
+                # Corregir el error invirtiendo el último bit
+                mensaje_recibido = mensaje_con_parity[:-1] + str(1 - int(mensaje_con_parity[-1]))
+            else:
+                mensajes_correctos += 1
+                mensaje_recibido = mensaje_con_parity
+            
+            if mensaje_recibido == mensaje:
+                mensajes_corregidos += 1
+        
+        print("Resultados después de la transmisión:")
+        print(f"Mensajes enviados correctamente: {mensajes_correctos}")
+        print(f"Mensajes incorrectos: {mensajes_incorrectos}")
+        print(f"Mensajes corregidos: {mensajes_corregidos}")
+    
+    return 0
 
-    # Calcula los bits de paridad esperados
-    bits_paridad_reales = np.sum(mensajes_corregidos, axis=1) % 2
-
-    # Identifica y corrige errores en los bits de paridad
-    errores = np.bitwise_xor(bits_paridad, bits_paridad_reales)
-
-    for i, error in enumerate(errores):
-        if error:
-            for j in range(M - 1):
-                if mensajes_recibidos[i, j] == 1:
-                    mensajes_corregidos[i, j] = 0
-                    break
-
-    # Retorna la cantidad de mensajes corregidos
-    return np.sum(mensajes_corregidos == mensajes)
-
-# Función principal del programa
-def principal():
-    # Lee las probabilidades desde el archivo
-    p_fuente, p_canal = leer_probabilidades('probs.txt')
-
-    # Calcula la entropía del canal, la equivocación y la información mutua
-    entropia_canal = calcular_entropia(p_canal)
-    equivocacion = calcular_equivocacion(p_fuente, p_canal)
-    informacion_mutua = calcular_informacion_mutua(p_fuente, p_canal)
-
-    # Imprime los resultados
-    print('Entropía del canal:', entropia_canal)
-    print('Equivocación:', equivocacion)
-    print('Información mutua:', informacion_mutua)
-
-    # Solicita al usuario ingresar el número de mensajes y la longitud del mensaje
-    N = int(input('Ingrese el número de mensajes (N): '))
-    M = int(input('Ingrese la longitud del mensaje (M): '))
-
-    # Verifica si se debe usar paridad cruzada según los argumentos de línea de comandos
-    if '-p' in sys.argv:
-        paridad_cruzada = True
-    else:
-        paridad_cruzada = False
-
-    # Realiza la simulación de la transmisión y obtiene los resultados
-    mensajes_correctos, mensajes_incorrectos, mensajes_corregidos = simular_transmision(p_fuente, p_canal, N, M, paridad_cruzada)
-
-    # Imprime los resultados de la simulación
-    print('Mensajes correctos:', mensajes_correctos)
-    print('Mensajes incorrectos:', mensajes_incorrectos)
-    print('Mensajes corregidos (paridad cruzada):', mensajes_corregidos)
+if __name__ == "__main__":
+    main()
 
 
-if __name__ == '__main__':
-    principal()
+
